@@ -17,9 +17,14 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Health check
+// Health check - with env debug
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        hasDB: !!process.env.DATABASE_URL,
+        hasJWT: !!process.env.JWT_SECRET
+    });
 });
 
 // Routes
@@ -30,7 +35,7 @@ app.use('/api/reports', reportRoutes);
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error('Server error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', message: err.message });
 });
 
 // 404 handler
@@ -43,6 +48,7 @@ app.listen(PORT, () => {
 ╔════════════════════════════════════════╗
 ║     💎 Finance PRO API Server          ║
 ║     Running on port ${PORT}               ║
+║     DB URL: ${process.env.DATABASE_URL ? 'Set' : 'NOT SET!'}
 ╚════════════════════════════════════════╝
   `);
 });
