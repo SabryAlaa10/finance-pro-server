@@ -4,7 +4,49 @@ import { verifyToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Apply auth middleware to all routes
+// ============ TELEGRAM BOT ENDPOINT (No Auth Required) ============
+
+const TELEGRAM_BOT_SECRET = process.env.TELEGRAM_BOT_SECRET || 'finance-pro-telegram-secret';
+
+// POST /api/transactions/telegram - Add transaction from Telegram bot
+router.post('/telegram', async (req, res) => {
+    try {
+        const { secret, userId, type, category, source, amount, description } = req.body;
+
+        // Verify secret
+        if (secret !== TELEGRAM_BOT_SECRET) {
+            return res.status(401).json({ error: 'Invalid secret' });
+        }
+
+        // Validate required fields
+        if (!userId || !type || !category || !source || !amount) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        // Use today's date
+        const date = new Date().toISOString().split('T')[0];
+
+        const result = await pool.query(
+            `INSERT INTO transactions (user_id, date, type, category, source, amount, description)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING *`,
+            [userId, date, type, category, source, parseFloat(amount), description || '']
+        );
+
+        res.status(201).json({
+            success: true,
+            transaction: result.rows[0],
+            message: `✅ تم إضافة ${type === 'Income' ? 'دخل' : 'مصروف'}: ${amount} EGP - ${category}`
+        });
+    } catch (err) {
+        console.error('Error saving transaction from Telegram:', err);
+        res.status(500).json({ error: 'Failed to save transaction' });
+    }
+});
+
+// ============ AUTHENTICATED ENDPOINTS ============
+
+// Apply auth middleware to all routes below
 router.use(verifyToken);
 
 // GET /api/transactions - Get all transactions for user
