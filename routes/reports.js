@@ -4,6 +4,120 @@ import pool from '../config/db.js';
 import { verifyToken } from '../middleware/auth.js';
 
 const router = express.Router();
+
+// ============ N8N WEBHOOK ENDPOINTS (No Auth Required) ============
+
+// Secret key for n8n webhooks - set this in environment variables
+const N8N_WEBHOOK_SECRET = process.env.N8N_WEBHOOK_SECRET || 'finance-pro-n8n-secret';
+
+// Middleware to verify n8n webhook requests
+const verifyN8nWebhook = (req, res, next) => {
+    const providedSecret = req.headers['x-webhook-secret'] || req.query.secret;
+    if (providedSecret !== N8N_WEBHOOK_SECRET) {
+        return res.status(401).json({ error: 'Invalid webhook secret' });
+    }
+    next();
+};
+
+// GET /api/reports/n8n/users - Get all users with email for n8n
+router.get('/n8n/users', verifyN8nWebhook, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT id, username, name, email FROM users WHERE email IS NOT NULL AND email != ''`
+        );
+        res.json({ users: result.rows, count: result.rows.length });
+    } catch (err) {
+        console.error('Error fetching users for n8n:', err);
+        res.status(500).json({ error: 'Failed to fetch users' });
+    }
+});
+
+// GET /api/reports/n8n/weekly-summary/:userId - Get weekly summary for n8n email
+router.get('/n8n/weekly-summary/:userId', verifyN8nWebhook, async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        // Get user info
+        const userResult = await pool.query(
+            'SELECT id, username, name, email FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const user = userResult.rows[0];
+
+        // Calculate date range (last 7 days)
+        const now = new Date();
+        const startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+        // Get summary
+        const summaryResult = await pool.query(
+            `SELECT 
+              COALESCE(SUM(CASE WHEN type = 'Income' THEN amount ELSE 0 END), 0) as total_income,
+              COALESCE(SUM(CASE WHEN type = 'Expense' THEN amount ELSE 0 END), 0) as total_expenses,
+              COALESCE(SUM(CASE WHEN type = 'Investment' THEN amount ELSE 0 END), 0) as investments
+             FROM transactions
+             WHERE user_id = $1 AND date >= $2 AND date <= $3`,
+            [userId, startDate.toISOString().split('T')[0], now.toISOString().split('T')[0]]
+        );
+
+        // Get top expense categories
+        const categoriesResult = await pool.query(
+            `SELECT category, SUM(amount) as total
+             FROM transactions
+             WHERE user_id = $1 AND type = 'Expense' AND date >= $2 AND date <= $3
+             GROUP BY category
+             ORDER BY total DESC
+             LIMIT 5`,
+            [userId, startDate.toISOString().split('T')[0], now.toISOString().split('T')[0]]
+        );
+
+        // Get transaction count
+        const countResult = await pool.query(
+            `SELECT COUNT(*) as count FROM transactions
+             WHERE user_id = $1 AND date >= $2 AND date <= $3`,
+            [userId, startDate.toISOString().split('T')[0], now.toISOString().split('T')[0]]
+        );
+
+        const summary = summaryResult.rows[0];
+        const totalIncome = parseFloat(summary.total_income);
+        const totalExpenses = parseFloat(summary.total_expenses);
+        const netSavings = totalIncome - totalExpenses;
+
+        res.json({
+            user: {
+                id: user.id,
+                name: user.name,
+                email: user.email
+            },
+            period: {
+                start: startDate.toISOString().split('T')[0],
+                end: now.toISOString().split('T')[0],
+                label: `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+            },
+            summary: {
+                totalIncome,
+                totalExpenses,
+                netSavings,
+                investments: parseFloat(summary.investments),
+                transactionCount: parseInt(countResult.rows[0].count)
+            },
+            topExpenseCategories: categoriesResult.rows.map(c => ({
+                category: c.category,
+                amount: parseFloat(c.total)
+            })),
+            dashboardUrl: process.env.CLIENT_URL || 'https://finance-pro-client.vercel.app'
+        });
+    } catch (err) {
+        console.error('Error generating weekly summary:', err);
+        res.status(500).json({ error: 'Failed to generate summary' });
+    }
+});
+
+// ============ AUTHENTICATED ENDPOINTS ============
 router.use(verifyToken);
 
 // Professional color palette
